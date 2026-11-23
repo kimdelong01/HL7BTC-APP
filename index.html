@@ -6,10 +6,22 @@
   <title>My record | SMART Patient App</title>
   <script src="https://cdn.jsdelivr.net/npm/fhirclient@3.0.1/bundle/fhir-client.js"></script>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 40rem; line-height: 1.4; }
-    dt { margin-top: 0.8rem; font-weight: 600; }
-    dd { margin: 0.15rem 0 0; }
-    .error { color: #8a1f1f; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 1.25rem; font: 1rem/1.55 system-ui, sans-serif; color: #203047; background: #f4f7fa; }
+    main { max-width: 46rem; margin: 0 auto; padding: 1.5rem; background: white; border-radius: 0.75rem; box-shadow: 0 2px 12px #14243b12; }
+    h1 { margin: 0 0 1rem; font-size: clamp(1.7rem, 5vw, 2.25rem); }
+    h2 { font-size: 1.25rem; margin: 1.5rem 0 0.75rem; }
+    dl { display: grid; grid-template-columns: minmax(8rem, 35%) 1fr; gap: 0.65rem 1rem; margin: 0; }
+    dt { font-weight: 650; }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    .section { padding-top: 0.5rem; border-top: 1px solid #dbe3ed; }
+    .result-date { display: block; color: #526174; font-size: 0.875rem; }
+    .error { color: #842020; }
+    .muted { color: #526174; }
+    a { color: #075d9c; }
+    a:focus-visible { outline: 3px solid #e4a82d; outline-offset: 3px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 360px) { main { padding: 1rem; } dl { grid-template-columns: 1fr; gap: 0.15rem; } dd { margin-bottom: 0.65rem; } }
   </style>
 </head>
 <body>
@@ -24,37 +36,50 @@
       </ul>
     </section>
 
-    <section id="record" hidden>
+    <p id="loading" role="status" hidden>Loading your patient record…</p>
+    <section id="record" hidden aria-label="Patient record">
+      <h2>Patient information</h2>
       <dl>
-        <dt>Name</dt>
-        <dd id="name"></dd>
-        <dt>Gender</dt>
-        <dd id="gender"></dd>
-        <dt>Birth date</dt>
-        <dd id="birth-date"></dd>
-        <dt>Age</dt>
-        <dd id="age"></dd>
+        <dt>Name</dt><dd id="name"></dd>
+        <dt>Gender</dt><dd id="gender"></dd>
+        <dt>Birth date</dt><dd id="birth-date"></dd>
+        <dt>Age</dt><dd id="age"></dd>
       </dl>
+      <section class="section" aria-labelledby="results-heading">
+        <h2 id="results-heading">Recent results</h2>
+        <p id="results-loading" role="status">Loading recent results…</p>
+        <p id="results-empty" class="muted" hidden>This sandbox patient has no matching observations.</p>
+        <p id="results-error" class="error" role="alert" hidden></p>
+        <dl id="results" hidden>
+          <dt>Height</dt><dd id="height">Not recorded</dd>
+          <dt>Blood pressure</dt><dd id="blood-pressure">Not recorded</dd>
+          <dt>HDL</dt><dd id="hdl">Not recorded</dd>
+          <dt>LDL</dt><dd id="ldl">Not recorded</dd>
+        </dl>
+      </section>
       <p><a href="./" id="sign-out">Sign out</a></p>
     </section>
-
     <p id="error" class="error" hidden></p>
   </main>
   <script>
     var params = new URLSearchParams(location.search);
     var cameBackFromAuth = params.has("code") || params.has("error") || params.has("state");
+    var signedOut = document.getElementById("signed-out");
+    var loading = document.getElementById("loading");
 
-    // ready() finishes the redirect: it trades the code for a token and
-    // restores that session on later visits. It rejects when nobody is signed in.
+    loading.hidden = false;
+    // ready() completes SMART sign-in and restores the authorized client.
+    // The Patient read provides identity; the separate Observation search provides results.
     FHIR.oauth2.ready()
       .then(function (client) {
-        return client.patient.read();
+        return client.patient.read().then(function (patient) {
+          showPatient(patient);
+          return loadObservations(client);
+        });
       })
-      .then(showPatient)
       .catch(function (error) {
-        if (cameBackFromAuth) {
-          showError(error);
-        }
+        loading.hidden = true;
+        if (cameBackFromAuth) showError(error);
       });
 
     document.getElementById("sign-out").addEventListener("click", function (event) {
@@ -63,13 +88,123 @@
       location.href = "./";
     });
 
+    // Show identity first so a failed Observation search never hides the patient.
+    // Patient.name and birthDate are optional FHIR fields.
     function showPatient(patient) {
-      document.getElementById("signed-out").hidden = true;
+      loading.hidden = true;
+      signedOut.hidden = true;
       document.getElementById("record").hidden = false;
       document.getElementById("name").textContent = formatName(patient);
       document.getElementById("gender").textContent = patient.gender || "Not recorded";
       document.getElementById("birth-date").textContent = patient.birthDate || "Not recorded";
       document.getElementById("age").textContent = formatAge(patient.birthDate);
+    }
+
+    // Request only FHIR Observation resources for the authorized patient and listed LOINC codes.
+    // The Bundle.entry resources are the measurements displayed in Recent results.
+    function loadObservations(client) {
+      var patientId = client.patient && client.patient.id;
+      if (!patientId) return showResultsError(new Error("No patient was selected during sign-in."));
+      var codes = ["8302-2", "85354-9", "8480-6", "8462-4", "2085-9", "13457-7"];
+      var query = "Observation?patient=" + encodeURIComponent(patientId)
+        + "&code=" + encodeURIComponent("http://loinc.org|" + codes.join(",http://loinc.org|"))
+        + "&_count=100";
+      return client.request(query)
+        .then(function (bundle) {
+          var observations = (bundle.entry || []).map(function (entry) { return entry.resource; })
+            .filter(function (resource) { return resource && resource.resourceType === "Observation"; });
+          document.getElementById("results-loading").hidden = true;
+          if (!observations.length) {
+            document.getElementById("results-empty").hidden = false;
+            return;
+          }
+          displayObservations(observations);
+        })
+        .catch(showResultsError);
+    }
+
+    // Use the FHIR Observation.code.coding LOINC code to identify a result.
+    // A blood-pressure panel can also carry systolic/diastolic in component[].
+    function hasCode(observation, code) {
+      return !!(observation.code && Array.isArray(observation.code.coding) &&
+        observation.code.coding.some(function (coding) {
+          return coding.system === "http://loinc.org" && coding.code === code;
+        }));
+    }
+
+    // Prefer effectiveDateTime, then issued, when choosing the newest Observation.
+    // A missing date is treated as older than a dated result.
+    function newest(observations) {
+      return observations.slice().sort(function (a, b) {
+        return dateStamp(b) - dateStamp(a);
+      })[0];
+    }
+    function dateStamp(observation) {
+      var value = observation.effectiveDateTime || observation.issued || "";
+      var parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    // Read valueQuantity.value and unit for a measurement; show Not recorded when absent.
+    function quantityText(quantity) {
+      if (!quantity || quantity.value === undefined || quantity.value === null) return null;
+      return String(quantity.value) + (quantity.unit || quantity.code ? " " + (quantity.unit || quantity.code) : "");
+    }
+
+    // Read effectiveDateTime or issued and append a readable date when supplied.
+    function withDate(value, observation) {
+      if (!value) return "Not recorded";
+      var raw = observation && (observation.effectiveDateTime || observation.issued);
+      if (!raw) return value;
+      var parsed = new Date(raw);
+      return value + (Number.isNaN(parsed.getTime()) ? "" : " · " + parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }));
+    }
+
+    // Show newest height, HDL, and LDL quantities and the most recent complete BP pair.
+    // BP can be a panel (85354-9) with components or separate systolic/diastolic observations.
+    function displayObservations(observations) {
+      function matching(code) { return observations.filter(function (o) { return hasCode(o, code); }); }
+      function showSingle(id, code) {
+        var result = newest(matching(code));
+        document.getElementById(id).textContent = result ? withDate(quantityText(result.valueQuantity), result) : "Not recorded";
+      }
+      showSingle("height", "8302-2");
+      showSingle("hdl", "2085-9");
+      showSingle("ldl", "13457-7");
+      var panels = matching("85354-9").filter(function (o) {
+        return Array.isArray(o.component) && o.component.length;
+      });
+      var bpCandidates = panels.map(function (panel) {
+        var systolic = panel.component.find(function (c) { return hasCode(c, "8480-6"); });
+        var diastolic = panel.component.find(function (c) { return hasCode(c, "8462-4"); });
+        return { observation: panel, systolic: systolic && systolic.valueQuantity, diastolic: diastolic && diastolic.valueQuantity };
+      }).filter(function (item) { return item.systolic && item.diastolic; });
+      var systolicSeparate = newest(matching("8480-6"));
+      var diastolicSeparate = newest(matching("8462-4"));
+      if (systolicSeparate && diastolicSeparate) {
+        bpCandidates.push({
+          observation: dateStamp(systolicSeparate) >= dateStamp(diastolicSeparate) ? systolicSeparate : diastolicSeparate,
+          systolic: systolicSeparate.valueQuantity,
+          diastolic: diastolicSeparate.valueQuantity
+        });
+      }
+      bpCandidates.sort(function (a, b) { return dateStamp(b.observation) - dateStamp(a.observation); });
+      var bp = bpCandidates[0];
+      var systolicValue = bp && bp.systolic && bp.systolic.value;
+      var diastolicValue = bp && bp.diastolic && bp.diastolic.value;
+      var bpValue = systolicValue != null && diastolicValue != null
+        ? String(systolicValue) + "/" + String(diastolicValue) + " " + ((bp.systolic.unit || bp.diastolic.unit) || "mmHg") : null;
+      document.getElementById("blood-pressure").textContent = bp ? withDate(bpValue, bp.observation) : "Not recorded";
+      document.getElementById("results").hidden = false;
+    }
+
+    // Keep the Patient visible and explain an Observation request failure in plain language.
+    function showResultsError(error) {
+      document.getElementById("results-loading").hidden = true;
+      var node = document.getElementById("results-error");
+      node.hidden = false;
+      node.textContent = "We couldn't load recent results. Please sign out and sign in again, or try later. "
+        + (error && error.message ? "Details: " + error.message : "");
     }
 
     function showError(error) {
@@ -83,30 +218,24 @@
     function formatName(patient) {
       var names = Array.isArray(patient.name) ? patient.name : [];
       var name = names.filter(function (item) { return item.use === "official"; })[0] || names[0];
-      if (!name) {
-        return "Name not recorded";
-      }
-      if (name.text) {
-        return name.text;
-      }
+      if (!name) return "Name not recorded";
+      if (name.text) return name.text;
       var given = Array.isArray(name.given) ? name.given.join(" ") : "";
       var family = name.family || "";
       return (given + " " + family).trim() || "Name not recorded";
     }
 
+    // Calculate age from Patient.birthDate; a missing date is not an error.
     function formatAge(birthDate) {
-      if (!birthDate) {
-        return "Not recorded";
-      }
+      if (!birthDate) return "Not recorded";
       var parts = birthDate.split("-");
       var year = Number(parts[0]);
       var month = Number(parts[1] || 1) - 1;
       var day = Number(parts[2] || 1);
+      if (!Number.isFinite(year) || year < 1) return "Not recorded";
       var today = new Date();
       var age = today.getFullYear() - year;
-      if (today.getMonth() < month || (today.getMonth() === month && today.getDate() < day)) {
-        age -= 1;
-      }
+      if (today.getMonth() < month || (today.getMonth() === month && today.getDate() < day)) age -= 1;
       return age + " years";
     }
   </script>
