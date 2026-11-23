@@ -31,6 +31,12 @@
     .error { color:#922b2b; }
     .muted,.note { color:var(--muted); }
     .note { font-size:.85rem; margin:1rem 0 0; }
+    .clinical-list { margin:0; padding:0; list-style:none; border:1px solid var(--line); border-radius:.85rem; overflow:hidden; }
+    .clinical-list li { padding:1rem 1.15rem; }
+    .clinical-list li + li { border-top:1px solid var(--line); }
+    .clinical-list li:nth-child(even) { background:#f8fbfc; }
+    .clinical-name { display:block; font-weight:700; color:var(--ink); }
+    .clinical-detail { display:block; color:var(--muted); font-size:.92rem; margin-top:.15rem; }
     .actions { margin:1.8rem 0 0; }
     a { color:#075d79; text-underline-offset:.2em; }
     a:focus-visible { outline:3px solid #e4a82d; outline-offset:3px; }
@@ -43,7 +49,7 @@
   <main>
     <p class="eyebrow">SMART on FHIR · Patient portal</p>
     <h1>My record</h1>
-    <p class="intro">A simple view of your information and latest available measurements.</p>
+    <p class="intro">A simple view of your information and latest available clinical information.</p>
 
     <section id="signed-out">
       <p>Sign in as the patient to see your record from the SMART sandbox.</p>
@@ -75,6 +81,20 @@
         </dl>
         <p class="note">Results come from the SMART Health IT test sandbox and may be incomplete. For learning purposes only.</p>
       </section>
+      <section class="section" aria-labelledby="allergies-heading">
+        <h2 id="allergies-heading">Allergies and intolerances</h2>
+        <p id="allergies-loading" role="status">Loading allergy records…</p>
+        <p id="allergies-empty" class="muted" hidden>No allergy records returned for this sandbox patient. This does not confirm no known allergies.</p>
+        <p id="allergies-error" class="error" role="alert" hidden></p>
+        <ul id="allergies-list" class="clinical-list" hidden></ul>
+      </section>
+      <section class="section" aria-labelledby="conditions-heading">
+        <h2 id="conditions-heading">Diagnoses and conditions</h2>
+        <p id="conditions-loading" role="status">Loading diagnoses and conditions…</p>
+        <p id="conditions-empty" class="muted" hidden>No diagnosis or condition records returned for this sandbox patient.</p>
+        <p id="conditions-error" class="error" role="alert" hidden></p>
+        <ul id="conditions-list" class="clinical-list" hidden></ul>
+      </section>
       <p class="actions"><a href="./" id="sign-out">Sign out</a></p>
     </section>
     <p id="error" class="error" hidden></p>
@@ -92,7 +112,8 @@
       .then(function (client) {
         return client.patient.read().then(function (patient) {
           showPatient(patient);
-          return loadObservations(client);
+          // Each resource is requested separately so a failure in one section does not hide the others.
+          return Promise.all([loadObservations(client), loadClinicalList(client, "AllergyIntolerance", "allergies"), loadClinicalList(client, "Condition", "conditions")]);
         });
       })
       .catch(function (error) {
@@ -139,6 +160,80 @@
           displayObservations(observations);
         })
         .catch(showResultsError);
+    }
+
+    // Request AllergyIntolerance or Condition resources only for the SMART-authorized patient.
+    // The returned Bundle.entry[].resource items populate their respective record sections.
+    function loadClinicalList(client, resourceType, sectionId) {
+      var patientId = client.patient && client.patient.id;
+      if (!patientId) {
+        showClinicalError(sectionId);
+        return Promise.resolve();
+      }
+      var query = resourceType + "?patient=" + encodeURIComponent(patientId) + "&_count=100";
+      return client.request(query)
+        .then(function (bundle) {
+          var items = (Array.isArray(bundle.entry) ? bundle.entry : [])
+            .map(function (entry) { return entry.resource; })
+            .filter(function (resource) { return resource && resource.resourceType === resourceType; });
+          document.getElementById(sectionId + "-loading").hidden = true;
+          if (!items.length) {
+            document.getElementById(sectionId + "-empty").hidden = false;
+            return;
+          }
+          var list = document.getElementById(sectionId + "-list");
+          items.forEach(function (resource) {
+            var item = document.createElement("li");
+            var heading = document.createElement("span");
+            heading.className = "clinical-name";
+            // AllergyIntolerance.code and Condition.code are CodeableConcept fields.
+            heading.textContent = conceptLabel(resource.code);
+            var detail = document.createElement("span");
+            detail.className = "clinical-detail";
+            var status = resource.clinicalStatus ? conceptLabel(resource.clinicalStatus) : "Status not recorded";
+            var parts = ["Clinical status: " + status];
+            if (resourceType === "AllergyIntolerance") {
+              // reaction[].manifestation[] describes reported reactions, if available.
+              var reactions = (Array.isArray(resource.reaction) ? resource.reaction : [])
+                .reduce(function (all, reaction) { return all.concat(reaction.manifestation || []); }, [])
+                .map(conceptLabel).filter(Boolean);
+              if (reactions.length) parts.push("Reaction: " + reactions.join(", "));
+            } else {
+              // Condition.recordedDate is optional and may be absent.
+              if (resource.recordedDate) parts.push("Recorded: " + readableDate(resource.recordedDate));
+            }
+            detail.textContent = parts.join(" · ");
+            item.appendChild(heading);
+            item.appendChild(detail);
+            list.appendChild(item);
+          });
+          list.hidden = false;
+        })
+        .catch(function () { showClinicalError(sectionId); });
+    }
+
+    // Read human-readable text or coding display from a FHIR CodeableConcept.
+    function conceptLabel(concept) {
+      if (!concept) return "Not specified";
+      if (concept.text) return concept.text;
+      var codings = Array.isArray(concept.coding) ? concept.coding : [];
+      return (codings.find(function (coding) { return coding.display; }) || {}).display
+        || (codings[0] && codings[0].code) || "Not specified";
+    }
+
+    // Format a FHIR date for display without modifying the source record.
+    function readableDate(value) {
+      var parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? value
+        : parsed.toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" });
+    }
+
+    // A failed resource request displays an error in its own section, not a blank record.
+    function showClinicalError(sectionId) {
+      document.getElementById(sectionId + "-loading").hidden = true;
+      var error = document.getElementById(sectionId + "-error");
+      error.hidden = false;
+      error.textContent = "This information could not be loaded. Try signing out and back in, or try again later.";
     }
 
     // Use the FHIR Observation.code.coding LOINC code to identify a result.
