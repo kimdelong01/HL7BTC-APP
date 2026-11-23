@@ -6,27 +6,44 @@
   <title>My record | SMART Patient App</title>
   <script src="https://cdn.jsdelivr.net/npm/fhirclient@3.0.1/bundle/fhir-client.js"></script>
   <style>
+    :root { color-scheme: light; --ink:#19324c; --muted:#53687c; --line:#dce7ed; --teal:#086b75; --bg:#edf4f7; }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 1.25rem; font: 1rem/1.55 system-ui, sans-serif; color: #203047; background: #f4f7fa; }
-    main { max-width: 46rem; margin: 0 auto; padding: 1.5rem; background: white; border-radius: 0.75rem; box-shadow: 0 2px 12px #14243b12; }
-    h1 { margin: 0 0 1rem; font-size: clamp(1.7rem, 5vw, 2.25rem); }
-    h2 { font-size: 1.25rem; margin: 1.5rem 0 0.75rem; }
-    dl { display: grid; grid-template-columns: minmax(8rem, 35%) 1fr; gap: 0.65rem 1rem; margin: 0; }
-    dt { font-weight: 650; }
-    dd { margin: 0; overflow-wrap: anywhere; }
-    .section { padding-top: 0.5rem; border-top: 1px solid #dbe3ed; }
-    .result-date { display: block; color: #526174; font-size: 0.875rem; }
-    .error { color: #842020; }
-    .muted { color: #526174; }
-    a { color: #075d9c; }
-    a:focus-visible { outline: 3px solid #e4a82d; outline-offset: 3px; }
-    [hidden] { display: none !important; }
-    @media (max-width: 360px) { main { padding: 1rem; } dl { grid-template-columns: 1fr; gap: 0.15rem; } dd { margin-bottom: 0.65rem; } }
+    body { margin:0; padding:clamp(1rem,4vw,2.5rem); font: 1rem/1.6 system-ui,-apple-system,sans-serif; color:var(--ink); background:var(--bg); }
+    main { max-width:52rem; margin:0 auto; padding:clamp(1.2rem,4vw,2.5rem); background:#fff; border:1px solid var(--line); border-radius:1.2rem; box-shadow:0 12px 35px rgba(23,57,77,.07); }
+    h1 { margin:0; font-size:clamp(1.8rem,5vw,2.4rem); letter-spacing:-.035em; line-height:1.2; }
+    h2 { font-size:1.16rem; margin:0 0 1.1rem; letter-spacing:-.01em; }
+    .eyebrow { margin:0 0 .4rem; font-size:.76rem; font-weight:750; letter-spacing:.11em; text-transform:uppercase; color:var(--teal); }
+    .intro { margin:.65rem 0 1.7rem; color:var(--muted); }
+    .section { margin-top:1.5rem; padding-top:1.5rem; border-top:1px solid var(--line); }
+    .identity { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; margin:0; }
+    .identity > div { padding:1rem; background:#f6fafb; border:1px solid #e5edf0; border-radius:.75rem; }
+    dt { font-weight:650; }
+    .identity dt { color:var(--muted); font-size:.83rem; }
+    dd { margin:0; overflow-wrap:anywhere; }
+    .identity dd { margin-top:.3rem; font-size:1.04rem; font-weight:650; }
+    .results-list { margin:0; border:1px solid var(--line); border-radius:.85rem; overflow:hidden; }
+    .result-row { display:grid; grid-template-columns:minmax(8rem,38%) 1fr; gap:1rem; align-items:center; padding:1rem 1.15rem; }
+    .result-row + .result-row { border-top:1px solid var(--line); }
+    .result-row:nth-child(even) { background:#f8fbfc; }
+    .result-row dt { color:var(--ink); }
+    .result-row dd { color:var(--teal); font-size:1.08rem; font-weight:700; }
+    .result-row dd.is-missing { color:var(--muted); font-size:1rem; font-weight:450; }
+    .error { color:#922b2b; }
+    .muted,.note { color:var(--muted); }
+    .note { font-size:.85rem; margin:1rem 0 0; }
+    .actions { margin:1.8rem 0 0; }
+    a { color:#075d79; text-underline-offset:.2em; }
+    a:focus-visible { outline:3px solid #e4a82d; outline-offset:3px; }
+    [hidden] { display:none !important; }
+    @media(max-width:520px) { .identity { grid-template-columns:1fr 1fr; gap:.6rem; } .identity > div { padding:.8rem; } .result-row { grid-template-columns:1fr; gap:.15rem; padding:.85rem 1rem; } }
+    @media(max-width:340px) { .identity { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
   <main>
+    <p class="eyebrow">SMART on FHIR · Patient portal</p>
     <h1>My record</h1>
+    <p class="intro">A simple view of your information and latest available measurements.</p>
 
     <section id="signed-out">
       <p>Sign in as the patient to see your record from the SMART sandbox.</p>
@@ -39,25 +56,26 @@
     <p id="loading" role="status" hidden>Loading your patient record…</p>
     <section id="record" hidden aria-label="Patient record">
       <h2>Patient information</h2>
-      <dl>
-        <dt>Name</dt><dd id="name"></dd>
-        <dt>Gender</dt><dd id="gender"></dd>
-        <dt>Birth date</dt><dd id="birth-date"></dd>
-        <dt>Age</dt><dd id="age"></dd>
+      <dl class="identity">
+        <div><dt>Name</dt><dd id="name"></dd></div>
+        <div><dt>Gender</dt><dd id="gender"></dd></div>
+        <div><dt>Birth date</dt><dd id="birth-date"></dd></div>
+        <div><dt>Age</dt><dd id="age"></dd></div>
       </dl>
       <section class="section" aria-labelledby="results-heading">
         <h2 id="results-heading">Recent results</h2>
         <p id="results-loading" role="status">Loading recent results…</p>
         <p id="results-empty" class="muted" hidden>This sandbox patient has no matching observations.</p>
         <p id="results-error" class="error" role="alert" hidden></p>
-        <dl id="results" hidden>
-          <dt>Height</dt><dd id="height">Not recorded</dd>
-          <dt>Blood pressure</dt><dd id="blood-pressure">Not recorded</dd>
-          <dt>HDL</dt><dd id="hdl">Not recorded</dd>
-          <dt>LDL</dt><dd id="ldl">Not recorded</dd>
+        <dl id="results" class="results-list" hidden>
+          <div class="result-row"><dt>Height</dt><dd id="height">Not recorded</dd></div>
+          <div class="result-row"><dt>Blood pressure</dt><dd id="blood-pressure">Not recorded</dd></div>
+          <div class="result-row"><dt>HDL cholesterol</dt><dd id="hdl">Not recorded</dd></div>
+          <div class="result-row"><dt>LDL cholesterol</dt><dd id="ldl">Not recorded</dd></div>
         </dl>
+        <p class="note">Results come from the SMART Health IT test sandbox and may be incomplete. For learning purposes only.</p>
       </section>
-      <p><a href="./" id="sign-out">Sign out</a></p>
+      <p class="actions"><a href="./" id="sign-out">Sign out</a></p>
     </section>
     <p id="error" class="error" hidden></p>
   </main>
@@ -148,7 +166,10 @@
     // Read valueQuantity.value and unit for a measurement; show Not recorded when absent.
     function quantityText(quantity) {
       if (!quantity || quantity.value === undefined || quantity.value === null) return null;
-      return String(quantity.value) + (quantity.unit || quantity.code ? " " + (quantity.unit || quantity.code) : "");
+      // Format for readability only; the original FHIR value is never changed.
+      var number = Number(quantity.value);
+      var displayed = Number.isFinite(number) ? number.toLocaleString(undefined, { maximumFractionDigits: 1 }) : String(quantity.value);
+      return displayed + (quantity.unit || quantity.code ? " " + (quantity.unit || quantity.code) : "");
     }
 
     // Read effectiveDateTime or issued and append a readable date when supplied.
@@ -193,9 +214,13 @@
       var systolicValue = bp && bp.systolic && bp.systolic.value;
       var diastolicValue = bp && bp.diastolic && bp.diastolic.value;
       var bpValue = systolicValue != null && diastolicValue != null
-        ? String(systolicValue) + "/" + String(diastolicValue) + " " + ((bp.systolic.unit || bp.diastolic.unit) || "mmHg") : null;
+        ? Math.round(Number(systolicValue)) + "/" + Math.round(Number(diastolicValue)) + " " + ((bp.systolic.unit || bp.diastolic.unit) || "mmHg") : null;
       document.getElementById("blood-pressure").textContent = bp ? withDate(bpValue, bp.observation) : "Not recorded";
       document.getElementById("results").hidden = false;
+      ["height", "blood-pressure", "hdl", "ldl"].forEach(function (id) {
+        var item = document.getElementById(id);
+        item.classList.toggle("is-missing", item.textContent === "Not recorded");
+      });
     }
 
     // Keep the Patient visible and explain an Observation request failure in plain language.
